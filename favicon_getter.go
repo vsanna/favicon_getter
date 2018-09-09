@@ -14,13 +14,15 @@ import (
 )
 
 func main() {
-	urlFilenname := os.Args[1]
+	if len(os.Args) == 1 {
+		fmt.Println("you must specify a filename that has urls")
+		return
+	}
 
-	// ioutil.ReadFile: 全データを[]byteとして読み込む。string(data)で表示できる
-	// file, err := ioutil.ReadFile(filename)
+	urlFilename := os.Args[1]
 
 	// os.Open: File structを返す file_unix.go
-	file, err := os.Open(urlFilenname)
+	file, err := os.Open(urlFilename)
 	defer file.Close()
 
 	if err != nil {
@@ -30,64 +32,19 @@ func main() {
 
 	scanner := bufio.NewScanner(file)
 
+	ch := make(chan string)
 	for scanner.Scan() {
 		urlString := scanner.Text()
-		url, err := url.Parse(urlString)
-		if err != nil {
-			log.Fatal(err)
+		go getFavicon(ch, urlString)
+	}
+
+	for {
+		fmt.Println("fetched!!")
+		href, ok := <-ch
+		if !ok {
+			break
 		}
-
-		fmt.Printf("start to fetch url: %s\n", url)
-		response, err := http.Get(url.String())
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-
-		b, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-
-		htmlTokens := html.NewTokenizer(strings.NewReader(string(b)))
-
-	PARSE_TOKEN:
-		for {
-			tokenType := htmlTokens.Next()
-
-			switch tokenType {
-
-			case html.ErrorToken:
-				break PARSE_TOKEN
-
-			case html.TextToken:
-
-			case html.StartTagToken, html.EndTagToken, html.SelfClosingTagToken:
-				token := htmlTokens.Token()
-				if token.Data != "link" {
-					continue
-				}
-
-				rel, ok := attrByName(&token, "rel")
-				if !ok {
-					continue
-				}
-
-				if !hasIcon(rel) {
-					continue
-				}
-
-				href, _ := attrByName(&token, "href")
-				if strings.HasPrefix(href, "http") {
-					fmt.Println(href)
-				} else {
-					fmt.Println((*url).Scheme + "://" + (*url).Host + href)
-				}
-			}
-		}
-
-		response.Body.Close()
+		fmt.Println(href)
 	}
 }
 
@@ -122,4 +79,63 @@ func hasIcon(rel string) bool {
 	}
 
 	return a.contains("icon")
+}
+
+func getFavicon(ch chan<- string, urlString string) {
+	url, err := url.Parse(urlString)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("start to fetch url: %s\n", url)
+	response, err := http.Get(url.String())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	b, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	htmlTokens := html.NewTokenizer(strings.NewReader(string(b)))
+
+PARSE_TOKEN:
+	for {
+		tokenType := htmlTokens.Next()
+
+		switch tokenType {
+
+		case html.ErrorToken:
+			break PARSE_TOKEN
+
+		case html.TextToken:
+
+		case html.StartTagToken, html.EndTagToken, html.SelfClosingTagToken:
+			token := htmlTokens.Token()
+			if token.Data != "link" {
+				continue
+			}
+
+			rel, ok := attrByName(&token, "rel")
+			if !ok {
+				continue
+			}
+
+			if !hasIcon(rel) {
+				continue
+			}
+
+			href, _ := attrByName(&token, "href")
+			if strings.HasPrefix(href, "http") {
+				ch <- href
+			} else {
+				ch <- fmt.Sprintf((*url).Scheme + "://" + (*url).Host + href)
+			}
+		}
+	}
+
+	response.Body.Close()
 }
